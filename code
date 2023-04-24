@@ -1,22 +1,160 @@
-!pip install pyspark
-
 from pyspark import SparkContext
 from pyspark.sql import SparkSession
 
 sc = SparkContext.getOrCreate()
 spark = SparkSession.builder.appName("my-app").getOrCreate()
 
-# Now you can use the spark variable to create a DataFrame and perform Spark operations
+from pyspark.sql.functions import col
+from pyspark.sql.functions import isnan, when, count
 
-
-from pyspark.sql.functions import col, isnan, when, count
+# Import PySpark ML libraries
 from pyspark.ml.feature import StandardScaler
 from pyspark.ml.clustering import KMeans
 from pyspark.ml.clustering import BisectingKMeans
 from pyspark.ml.clustering import GaussianMixture
+
+# Import PySpark SQL functions
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
 
-committing change
+Marketing = spark.read.csv('/FileStore/tables/marketing_campaign_c.csv', header=True, inferSchema=True, sep = ';')
+Marketing.show()
 
-coomit 2
+display(Marketing)
+
+
+Marketing = Marketing.dropna().dropDuplicates()
+
+from pyspark.sql.functions import col, expr
+
+# Assuming your DataFrame is called 'df'
+Marketing = Marketing.withColumn('TotalProduct', expr('MntWines + MntFruits + MntMeatProducts + MntFishProducts + MntSweetProducts + MntGoldProds'))
+Marketing = Marketing.withColumn('TotalPurchases', expr('NumDealsPurchases + NumWebPurchases + NumCatalogPurchases + NumStorePurchases'))
+Marketing_Cluster = Marketing.select(col('Income'), col('TotalProduct'), col('TotalPurchases'), col('Recency')).na.drop()
+display(Marketing_Cluster)
+
+Marketing_Cluster.describe().show()
+
+from pyspark.sql.functions import col, expr, percentile_approx
+
+# Define a function to calculate the IQR and identify outliers
+def find_outliers(df, col_name):
+    q1, q3 = df.approxQuantile(col_name, [0.25, 0.75], 0.01)
+    iqr = q3 - q1
+    lower_bound = q1 - 1.5 * iqr
+    upper_bound = q3 + 1.5 * iqr
+    return df.select(col(col_name)).where(expr(f"{col_name} < {lower_bound} or {col_name} > {upper_bound}"))
+
+# Example usage
+outliers = find_outliers(Marketing_Cluster, "TotalProduct")
+display(outliers)
+
+import pyspark.sql.functions as F
+import matplotlib.pyplot as plt
+
+# convert the PySpark dataframe to a Pandas dataframe for plotting
+pandas_df = Marketing_Cluster.select('Income', 'TotalProduct').toPandas()
+
+# plot the scatter plot
+plt.figure(figsize=[20,8])
+plt.scatter(pandas_df['TotalProduct'], pandas_df['Income'], s=100, color='blue')
+plt.title('The scatterplot of Customers Income and number of buying products')
+plt.xlabel('TotalBuyProduct')
+plt.ylabel('Income')
+plt.show()
+
+from pyspark.ml.feature import QuantileDiscretizer
+
+# Create a QuantileDiscretizer transformer to bucketize the TotalProduct column into 10 bins
+total_product_discretizer = QuantileDiscretizer(numBuckets=10, inputCol='TotalProduct', outputCol='TotalProductBucket')
+
+# Apply the transformer to the dataframe and create a new column with the bucket values
+df_bucketized = total_product_discretizer.fit(Marketing_Cluster).transform(Marketing_Cluster)
+
+# Calculate the lower and upper bounds of the bucket values that contain most of the data
+q1, q3 = df_bucketized.approxQuantile('Income', [0.25, 0.75], 0.01)
+iqr = q3 - q1
+lower_bound = q1 - 1.5 * iqr
+upper_bound = q3 + 1.5 * iqr
+
+# Filter out the rows that have TotalProduct values outside the lower and upper bounds
+df_outliers_removed = df_bucketized.filter((df_bucketized['Income'] >= lower_bound) & (df_bucketized['Income'] <= upper_bound))
+
+# Show the resulting dataframe without outliers
+display(df_outliers_removed)
+
+pandas_df = df_outliers_removed.select('Income', 'TotalProduct').toPandas()
+
+# plot the scatter plot
+plt.figure(figsize=[20,8])
+plt.scatter(pandas_df['TotalProduct'], pandas_df['Income'], s=100, color='blue')
+plt.title('The scatterplot of Customers Income and number of buying products')
+plt.xlabel('TotalBuyProduct')
+plt.ylabel('Income')
+plt.show()
+
+from pyspark.sql.functions import monotonically_increasing_id
+from pyspark.ml.clustering import KMeans
+from pyspark.ml.feature import VectorAssembler
+
+df_outliers_removed = df_outliers_removed.withColumn("unique_id", monotonically_increasing_id())
+
+# Create a vector assembler to combine features into a single vector column
+assembler = VectorAssembler(inputCols=["TotalProduct", "TotalPurchases", "Recency"], outputCol="features")
+
+# Apply the vector assembler to the dataframe
+df_cluster_assembled = assembler.transform(df_outliers_removed)
+
+# Train KMeans model with 5 clusters
+kmeans = KMeans(k=5, seed=0)
+model = kmeans.fit(df_cluster_assembled)
+
+# Get the cluster labels for each row
+predictions = model.transform(df_cluster_assembled).select("prediction")
+predictions
+
+from pyspark.sql.functions import monotonically_increasing_id
+
+# Create first dataframe with ID column
+df1 = df_outliers_removed.withColumn("id", monotonically_increasing_id())
+
+# Create second dataframe with ID column
+df2 = predictions.withColumn("id", monotonically_increasing_id())
+
+joined_df = df1.join(df2, "id", "inner")
+joined_df.show(20)
+
+filtered_label0 = joined_df.filter(col("prediction") == "0")
+filtered_label1 = joined_df.filter(col("prediction") == "1")
+filtered_label2 = joined_df.filter(col("prediction") == "2")
+filtered_label3 = joined_df.filter(col("prediction") == "3")
+filtered_label4 = joined_df.filter(col("prediction") == "4")
+
+import matplotlib.pyplot as plt
+import pandas as pd
+
+# convert the PySpark DataFrames to Pandas DataFrames
+pandas_label0 = filtered_label0.toPandas()
+pandas_label1 = filtered_label1.toPandas()
+pandas_label2 = filtered_label2.toPandas()
+pandas_label3 = filtered_label3.toPandas()
+pandas_label4 = filtered_label4.toPandas()
+
+# create the scatter plot
+fig, ax = plt.subplots(figsize=[20, 8])
+ax.scatter(pandas_label0.iloc[:, 2], pandas_label0.iloc[:, 1], s=50, color='red')
+ax.scatter(pandas_label1.iloc[:, 2], pandas_label1.iloc[:, 1], s=50, color='blue')
+ax.scatter(pandas_label2.iloc[:, 2], pandas_label2.iloc[:, 1], s=50, color='green')
+ax.scatter(pandas_label3.iloc[:, 2], pandas_label3.iloc[:, 1], s=50, color='cyan')
+ax.scatter(pandas_label4.iloc[:, 2], pandas_label4.iloc[:, 1], s=50, color='yellow')
+ax.set_title('Clusters of Customers (Clustering Kmean Model)')
+ax.set_xlabel('TotalBuyProduct')
+ax.set_ylabel('Income')
+plt.show()
+
+
+filtered_label0.describe().show()
+filtered_label1.describe().show()
+filtered_label2.describe().show()
+filtered_label3.describe().show()
+filtered_label4.describe().show()
