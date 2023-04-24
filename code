@@ -158,3 +158,83 @@ filtered_label1.describe().show()
 filtered_label2.describe().show()
 filtered_label3.describe().show()
 filtered_label4.describe().show()
+
+
+# Import necessary libraries
+from pyspark.ml import Pipeline
+from pyspark.ml.feature import StringIndexer, VectorAssembler
+from pyspark.ml.classification import DecisionTreeClassifier
+from pyspark.ml.evaluation import MulticlassClassificationEvaluator
+
+# Convert categorical columns to numeric using StringIndexer
+educationIndexer = StringIndexer(inputCol="Education", outputCol="educationIndex")
+maritalIndexer = StringIndexer(inputCol="Marital_Status", outputCol="maritalIndex")
+
+# Create feature vector using VectorAssembler
+assembler = VectorAssembler(inputCols=["Year_Birth", "educationIndex", "maritalIndex", "Income", "Kidhome", "Teenhome", "Recency", "MntWines", "MntFruits", "MntMeatProducts", "MntFishProducts", "MntSweetProducts", "MntGoldProds", "NumDealsPurchases", "NumWebPurchases", "NumCatalogPurchases", "NumStorePurchases", "NumWebVisitsMonth", "AcceptedCmp3", "AcceptedCmp4", "AcceptedCmp5", "AcceptedCmp1", "AcceptedCmp2", "Complain"], outputCol="features")
+
+# Split the dataset into training and testing sets
+(trainingData, testData) = df.randomSplit([0.7, 0.3], seed=42)
+
+# Build a decision tree model
+dt = DecisionTreeClassifier(labelCol="Response", featuresCol="features", maxDepth=5, impurity="gini")
+
+# Chain indexers and tree in a Pipeline
+pipeline = Pipeline(stages=[educationIndexer, maritalIndexer, assembler, dt])
+
+# Train the model on the training data
+model = pipeline.fit(trainingData)
+
+# Make predictions on the test data
+predictions = model.transform(testData)
+
+# Evaluate the model using MulticlassClassificationEvaluator
+evaluator = MulticlassClassificationEvaluator(labelCol="Response", predictionCol="prediction", metricName="accuracy")
+accuracy = evaluator.evaluate(predictions)
+
+# Print the accuracy score
+print("Test Accuracy = %g" % (accuracy))
+
+from pyspark.ml.classification import RandomForestClassifier
+
+
+# Build a random forest model
+rf = RandomForestClassifier(labelCol="Response", featuresCol="features", numTrees=20, maxDepth=5)
+
+# Chain indexers and forest in a Pipeline
+pipeline = Pipeline(stages=[educationIndexer, maritalIndexer, assembler, rf])
+
+# Train the model on the training data
+model = pipeline.fit(trainingData)
+
+# Make predictions on the test data
+predictions = model.transform(testData)
+
+# Evaluate the model using MulticlassClassificationEvaluator
+evaluator = MulticlassClassificationEvaluator(labelCol="Response", predictionCol="prediction", metricName="accuracy")
+accuracy = evaluator.evaluate(predictions)
+
+# Print the accuracy score
+print("Test Accuracy = %g" % (accuracy))
+
+# Create a new feature vector with the selected features
+assembler = VectorAssembler(inputCols=["educationIndex", "maritalIndex", "Income", "Kidhome", "Teenhome"], outputCol="features")
+
+# Chain indexers and forest in a Pipeline
+pipeline = Pipeline(stages=[educationIndexer, maritalIndexer, assembler, rf])
+
+# Train the model on the training data
+model = pipeline.fit(trainingData)
+
+# Make predictions on the test data
+predictions = model.transform(testData)
+
+# Calculate the number of correct predictions and the total number of predictions
+correctPredictions = predictions.filter(predictions.Response == predictions.prediction).count()
+totalPredictions = predictions.count()
+
+# Calculate the accuracy rate
+accuracyRate = correctPredictions / totalPredictions
+
+# Print the accuracy rate
+print("Accuracy rate based on selected features = %.2f%%" % (accuracyRate * 100))
